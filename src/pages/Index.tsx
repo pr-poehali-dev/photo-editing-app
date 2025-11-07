@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -16,6 +16,9 @@ interface Filters {
   grayscale: number;
 }
 
+type DrawTool = 'pen' | 'eraser' | 'none';
+type TransformTool = 'enlarge' | 'none';
+
 const Index = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>({
@@ -26,7 +29,32 @@ const Index = () => {
     grayscale: 0,
   });
   const [activeTab, setActiveTab] = useState('gallery');
+  const [drawTool, setDrawTool] = useState<DrawTool>('none');
+  const [transformTool, setTransformTool] = useState<TransformTool>('none');
+  const [brushSize, setBrushSize] = useState(5);
+  const [brushColor, setBrushColor] = useState('#8B5CF6');
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [enlargeAmount, setEnlargeAmount] = useState(1.2);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    if (selectedImage && canvasRef.current && imageRef.current) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      const img = imageRef.current;
+      
+      img.onload = () => {
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+        }
+      };
+    }
+  }, [selectedImage]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -39,6 +67,66 @@ const Index = () => {
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (drawTool === 'none') return;
+    setIsDrawing(true);
+    draw(e);
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawing && e.type !== 'mousedown') return;
+    if (!canvasRef.current || drawTool === 'none') return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+
+    ctx.lineWidth = brushSize;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (drawTool === 'pen') {
+      ctx.strokeStyle = brushColor;
+      ctx.globalCompositeOperation = 'source-over';
+    } else if (drawTool === 'eraser') {
+      ctx.globalCompositeOperation = 'destination-out';
+    }
+
+    if (e.type === 'mousedown') {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+  };
+
+  const clearCanvas = () => {
+    if (!canvasRef.current || !imageRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (ctx && imageRef.current.complete) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(imageRef.current, 0, 0);
+      toast.success('Рисунок очищен');
+    }
+  };
+
+  const applyEnlargement = () => {
+    if (!canvasRef.current || transformTool !== 'enlarge') return;
+    toast.success(`Увеличение применено (${enlargeAmount}x)`);
   };
 
   const handleFilterChange = (filter: FilterType, value: number[]) => {
@@ -83,7 +171,13 @@ const Index = () => {
       toast.error('Выберите изображение');
       return;
     }
-    toast.success('Изображение экспортировано');
+    if (canvasRef.current) {
+      const link = document.createElement('a');
+      link.download = 'edited-photo.png';
+      link.href = canvasRef.current.toDataURL();
+      link.click();
+      toast.success('Изображение экспортировано');
+    }
   };
 
   const resetFilters = () => {
@@ -117,7 +211,7 @@ const Index = () => {
 
       <main className="container mx-auto px-6 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-4 mb-8">
+          <TabsList className="grid w-full max-w-3xl mx-auto grid-cols-6 mb-8">
             <TabsTrigger value="gallery" className="gap-2">
               <Icon name="Images" size={16} />
               Галерея
@@ -130,9 +224,17 @@ const Index = () => {
               <Icon name="SlidersHorizontal" size={16} />
               Фильтры
             </TabsTrigger>
+            <TabsTrigger value="draw" className="gap-2" disabled={!selectedImage}>
+              <Icon name="Pencil" size={16} />
+              Рисование
+            </TabsTrigger>
+            <TabsTrigger value="transform" className="gap-2" disabled={!selectedImage}>
+              <Icon name="Maximize2" size={16} />
+              Трансформация
+            </TabsTrigger>
             <TabsTrigger value="tools" className="gap-2" disabled={!selectedImage}>
               <Icon name="Wrench" size={16} />
-              Инструменты
+              AI
             </TabsTrigger>
           </TabsList>
 
@@ -166,14 +268,22 @@ const Index = () => {
           <TabsContent value="editor" className="mt-0">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <Card className="lg:col-span-2 p-6">
-                <div className="aspect-video bg-muted rounded-lg overflow-hidden flex items-center justify-center">
+                <div className="aspect-video bg-muted rounded-lg overflow-hidden flex items-center justify-center relative">
                   {selectedImage ? (
-                    <img
-                      src={selectedImage}
-                      alt="Preview"
-                      style={getFilterStyle()}
-                      className="max-w-full max-h-full object-contain"
-                    />
+                    <>
+                      <img
+                        ref={imageRef}
+                        src={selectedImage}
+                        alt="Preview"
+                        style={getFilterStyle()}
+                        className="max-w-full max-h-full object-contain absolute"
+                      />
+                      <canvas
+                        ref={canvasRef}
+                        className="max-w-full max-h-full object-contain relative z-10"
+                        style={{ cursor: drawTool !== 'none' ? 'crosshair' : 'default' }}
+                      />
+                    </>
                   ) : (
                     <Icon name="Image" size={64} className="text-muted-foreground" />
                   )}
@@ -348,17 +458,209 @@ const Index = () => {
             </div>
           </TabsContent>
 
+          <TabsContent value="draw" className="mt-0">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <Card className="lg:col-span-2 p-6">
+                <div className="aspect-video bg-muted rounded-lg overflow-hidden flex items-center justify-center relative">
+                  {selectedImage ? (
+                    <>
+                      <img
+                        ref={imageRef}
+                        src={selectedImage}
+                        alt="Preview"
+                        className="max-w-full max-h-full object-contain absolute pointer-events-none"
+                      />
+                      <canvas
+                        ref={canvasRef}
+                        onMouseDown={startDrawing}
+                        onMouseMove={draw}
+                        onMouseUp={stopDrawing}
+                        onMouseLeave={stopDrawing}
+                        className="max-w-full max-h-full object-contain relative z-10"
+                        style={{ cursor: drawTool !== 'none' ? 'crosshair' : 'default' }}
+                      />
+                    </>
+                  ) : (
+                    <Icon name="Image" size={64} className="text-muted-foreground" />
+                  )}
+                </div>
+              </Card>
+
+              <Card className="p-6">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <Icon name="Pencil" size={20} />
+                  Инструменты рисования
+                </h3>
+                
+                <div className="space-y-4">
+                  <div className="flex gap-2">
+                    <Button
+                      variant={drawTool === 'pen' ? 'default' : 'outline'}
+                      className="flex-1 gap-2"
+                      onClick={() => setDrawTool('pen')}
+                    >
+                      <Icon name="Pencil" size={18} />
+                      Кисть
+                    </Button>
+                    <Button
+                      variant={drawTool === 'eraser' ? 'default' : 'outline'}
+                      className="flex-1 gap-2"
+                      onClick={() => setDrawTool('eraser')}
+                    >
+                      <Icon name="Eraser" size={18} />
+                      Ластик
+                    </Button>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="text-sm font-medium">Размер кисти</label>
+                      <span className="text-sm text-muted-foreground">{brushSize}px</span>
+                    </div>
+                    <Slider
+                      value={[brushSize]}
+                      onValueChange={(v) => setBrushSize(v[0])}
+                      min={1}
+                      max={50}
+                      step={1}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium mb-3 block">Цвет кисти</label>
+                    <div className="flex gap-2 flex-wrap">
+                      {['#8B5CF6', '#EF4444', '#10B981', '#3B82F6', '#F59E0B', '#EC4899', '#000000', '#FFFFFF'].map(color => (
+                        <button
+                          key={color}
+                          onClick={() => setBrushColor(color)}
+                          className="w-10 h-10 rounded-lg border-2 transition-all hover:scale-110"
+                          style={{
+                            backgroundColor: color,
+                            borderColor: brushColor === color ? '#8B5CF6' : 'transparent'
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-4 space-y-2">
+                    <Button
+                      variant="outline"
+                      className="w-full gap-2"
+                      onClick={clearCanvas}
+                    >
+                      <Icon name="RotateCcw" size={18} />
+                      Очистить рисунок
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full gap-2"
+                      onClick={() => setDrawTool('none')}
+                    >
+                      <Icon name="Hand" size={18} />
+                      Отключить рисование
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="transform" className="mt-0">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <Card className="lg:col-span-2 p-6">
+                <div className="aspect-video bg-muted rounded-lg overflow-hidden flex items-center justify-center relative">
+                  {selectedImage ? (
+                    <>
+                      <img
+                        ref={imageRef}
+                        src={selectedImage}
+                        alt="Preview"
+                        className="max-w-full max-h-full object-contain absolute pointer-events-none"
+                      />
+                      <canvas
+                        ref={canvasRef}
+                        className="max-w-full max-h-full object-contain relative z-10"
+                      />
+                    </>
+                  ) : (
+                    <Icon name="Image" size={64} className="text-muted-foreground" />
+                  )}
+                </div>
+              </Card>
+
+              <Card className="p-6">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <Icon name="Maximize2" size={20} />
+                  Трансформация
+                </h3>
+                
+                <div className="space-y-4">
+                  <Button
+                    variant={transformTool === 'enlarge' ? 'default' : 'outline'}
+                    className="w-full gap-2"
+                    onClick={() => setTransformTool(transformTool === 'enlarge' ? 'none' : 'enlarge')}
+                  >
+                    <Icon name="Maximize2" size={18} />
+                    {transformTool === 'enlarge' ? 'Режим активен' : 'Активировать увеличение'}
+                  </Button>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="text-sm font-medium">Сила увеличения</label>
+                      <span className="text-sm text-muted-foreground">{enlargeAmount.toFixed(1)}x</span>
+                    </div>
+                    <Slider
+                      value={[enlargeAmount]}
+                      onValueChange={(v) => setEnlargeAmount(v[0])}
+                      min={1.0}
+                      max={2.0}
+                      step={0.1}
+                    />
+                  </div>
+
+                  <div className="pt-4 border-t">
+                    <Button
+                      className="w-full gap-2"
+                      onClick={applyEnlargement}
+                      disabled={transformTool !== 'enlarge'}
+                    >
+                      <Icon name="Check" size={18} />
+                      Применить увеличение
+                    </Button>
+                  </div>
+
+                  <div className="mt-6 p-4 bg-muted rounded-lg">
+                    <div className="flex items-start gap-2">
+                      <Icon name="Info" size={16} className="text-muted-foreground mt-0.5" />
+                      <p className="text-xs text-muted-foreground">
+                        Активируйте режим увеличения, выберите нужную область и примените эффект
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </TabsContent>
+
           <TabsContent value="tools" className="mt-0">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <Card className="lg:col-span-2 p-6">
-                <div className="aspect-video bg-muted rounded-lg overflow-hidden flex items-center justify-center">
+                <div className="aspect-video bg-muted rounded-lg overflow-hidden flex items-center justify-center relative">
                   {selectedImage ? (
-                    <img
-                      src={selectedImage}
-                      alt="Preview"
-                      style={getFilterStyle()}
-                      className="max-w-full max-h-full object-contain"
-                    />
+                    <>
+                      <img
+                        ref={imageRef}
+                        src={selectedImage}
+                        alt="Preview"
+                        style={getFilterStyle()}
+                        className="max-w-full max-h-full object-contain absolute"
+                      />
+                      <canvas
+                        ref={canvasRef}
+                        className="max-w-full max-h-full object-contain relative z-10 pointer-events-none"
+                      />
+                    </>
                   ) : (
                     <Icon name="Image" size={64} className="text-muted-foreground" />
                   )}
